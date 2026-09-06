@@ -187,6 +187,10 @@ class FingerprintGrowComponent final : public PollingComponent, public uart::UAR
   bool has_sensing_pin_ = false;
   bool has_power_pin_ = false;
   bool is_sensor_awake_ = false;
+  // True once check_password_() has succeeded at least once. Before that,
+  // update() retries the handshake in the background instead of scanning.
+  bool authenticated_ = false;
+  uint8_t auth_retries_left_ = 20;
   uint32_t last_transfer_ms_ = 0;
   uint32_t last_aura_led_control_ = 0;
   uint32_t last_aura_led_duration_ = 0;

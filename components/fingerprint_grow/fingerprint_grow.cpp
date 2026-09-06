@@ -10,6 +10,31 @@ static const char *const TAG = "fingerprint_grow";
 // Based on Adafruit's library: https://github.com/adafruit/Adafruit-Fingerprint-Sensor-Library
 
 void FingerprintGrowComponent::update() {
+  if (!this->authenticated_) {
+    // The very first handshake attempt happens fast and non-blocking in
+    // setup() so we never delay WiFi's own time-critical association
+    // window. Some Grow-protocol sensor clones need longer than that one
+    // quick attempt to finish their own power-on self-test, so retry here
+    // on the component's normal polling cadence instead of busy-waiting in
+    // setup() — each attempt is spaced out by update_interval for free,
+    // with no extra delay() of our own.
+    if (this->check_password_()) {
+      this->authenticated_ = true;
+      ESP_LOGI(TAG, "Sensor authenticated after retrying in the background");
+      if (this->new_password_ != std::numeric_limits<uint32_t>::max()) {
+        this->set_password_();
+      } else {
+        this->get_parameters_();
+      }
+    } else if (this->auth_retries_left_ > 0) {
+      this->auth_retries_left_--;
+      ESP_LOGW(TAG, "No response yet, %u background retries left", this->auth_retries_left_);
+    } else {
+      ESP_LOGE(TAG, "Sensor never responded after all background retries");
+    }
+    return;
+  }
+
   if (this->enrollment_image_ > this->enrollment_buffers_) {
     this->finish_enrollment(this->save_fingerprint_());
     return;
@@ -79,22 +104,16 @@ void FingerprintGrowComponent::setup() {
   this->sensor_sleep_();
   delay(20);  // This delay guarantees the sensor will in fact be powered power.
 
-  // Some Grow-protocol sensor clones need noticeably longer than one 20ms
-  // settle window to finish their own power-on self-test before they will
-  // answer the very first UART command, especially when VCC is tied
-  // directly to the board's always-on rail instead of a controlled
-  // sensor_power_pin. Retry the handshake a few times with a short backoff
-  // instead of permanently failing the component after a single attempt.
-  bool authenticated = false;
-  for (uint8_t attempt = 0; attempt < 3 && !authenticated; attempt++) {
-    if (attempt > 0) {
-      ESP_LOGW(TAG, "No response on handshake attempt %u, retrying...", attempt);
-      delay(250);
-    }
-    authenticated = this->check_password_();
-  }
+  // Exactly one quick, non-blocking attempt here — matches stock timing so
+  // we never eat into WiFi's time-critical early association window. Some
+  // Grow-protocol sensor clones need longer than this to finish their own
+  // power-on self-test when VCC is tied directly to an always-on rail
+  // instead of a controlled sensor_power_pin; if this first attempt gets no
+  // response, update() retries on its own normal polling cadence instead of
+  // us busy-waiting here in setup(). See authenticated_ / auth_retries_left_.
+  this->authenticated_ = this->check_password_();
 
-  if (authenticated) {
+  if (this->authenticated_) {
     if (this->new_password_ != std::numeric_limits<uint32_t>::max()) {
       if (this->set_password_())
         return;
@@ -102,8 +121,9 @@ void FingerprintGrowComponent::setup() {
       if (this->get_parameters_())
         return;
     }
+  } else {
+    ESP_LOGW(TAG, "No response on initial handshake, will retry in the background");
   }
-  this->mark_failed();
 }
 
 void FingerprintGrowComponent::enroll_fingerprint(uint16_t finger_id, uint8_t num_buffers) {
