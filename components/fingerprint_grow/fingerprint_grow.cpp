@@ -45,6 +45,7 @@ void FingerprintGrowComponent::update() {
     if (this->sensing_pin_->digital_read()) {
       ESP_LOGV(TAG, "No touch sensing");
       this->waiting_removal_ = false;
+      this->waiting_removal_started_ms_ = 0;
       if ((this->enrollment_image_ == 0) &&  // Not in enrolment process
           (millis() - this->last_transfer_ms_ > this->idle_period_to_sleep_ms_) && (this->is_sensor_awake_)) {
         this->sensor_sleep_();
@@ -59,6 +60,18 @@ void FingerprintGrowComponent::update() {
     if ((!this->has_sensing_pin_) && (this->scan_image_(1) == NO_FINGER)) {
       ESP_LOGD(TAG, "Finger removed");
       this->waiting_removal_ = false;
+      this->waiting_removal_started_ms_ = 0;
+    } else if (this->has_sensing_pin_ && this->waiting_removal_started_ms_ != 0 &&
+               (millis() - this->waiting_removal_started_ms_ > REMOVAL_TIMEOUT_MS)) {
+      // tinytouch's own driver documents the TouchOut/sensing pin as "not
+      // reliable enough" on some sensor variants and never gates on it. If
+      // it never reports "no touch" within a sane window after a
+      // successful scan, don't let one flaky reading wedge this component
+      // forever — assume the finger was removed and resume normal polling.
+      ESP_LOGW(TAG, "Sensing pin didn't confirm removal after %ums, resetting anyway",
+               (unsigned) REMOVAL_TIMEOUT_MS);
+      this->waiting_removal_ = false;
+      this->waiting_removal_started_ms_ = 0;
     }
     return;
   }
@@ -73,6 +86,7 @@ void FingerprintGrowComponent::update() {
     return;
   }
   this->waiting_removal_ = true;
+  this->waiting_removal_started_ms_ = millis();
   if (result != OK) {
     this->finish_enrollment(result);
     return;
@@ -161,6 +175,7 @@ void FingerprintGrowComponent::scan_and_match_() {
   }
   if (this->scan_image_(1) == OK) {
     this->waiting_removal_ = true;
+    this->waiting_removal_started_ms_ = millis();
     this->data_ = {SEARCH, 0x01, 0x00, 0x00, (uint8_t) (this->capacity_ >> 8), (uint8_t) (this->capacity_ & 0xFF)};
     switch (this->send_command_()) {
       case OK: {
@@ -198,6 +213,7 @@ uint8_t FingerprintGrowComponent::scan_image_(uint8_t buffer) {
     case NO_FINGER:
       if (this->has_sensing_pin_) {
         this->waiting_removal_ = true;
+        this->waiting_removal_started_ms_ = millis();
         ESP_LOGD(TAG, "Finger Misplaced");
         this->finger_scan_misplaced_callback_.call();
       } else {

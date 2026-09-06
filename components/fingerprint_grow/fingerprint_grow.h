@@ -20,6 +20,10 @@ static const uint8_t WAIT_FOR_WAKE_UP_MS = 200;
 
 static const uint32_t DEFAULT_IDLE_PERIOD_TO_SLEEP_MS = 5000;
 
+// Safety-net cap on how long we'll trust a sensing_pin that hasn't reported
+// "finger removed" after a successful scan before assuming it anyway.
+static const uint32_t REMOVAL_TIMEOUT_MS = 3000;
+
 enum GrowPacketType {
   COMMAND = 0x01,
   DATA = 0x02,
@@ -191,6 +195,10 @@ class FingerprintGrowComponent final : public PollingComponent, public uart::UAR
   // update() retries the handshake in the background instead of scanning.
   bool authenticated_ = false;
   uint8_t auth_retries_left_ = 20;
+  // millis() timestamp of when waiting_removal_ last became true, or 0 when
+  // not waiting. Lets update() force-clear a stuck wait if the sensing pin
+  // never confirms removal (see REMOVAL_TIMEOUT_MS).
+  uint32_t waiting_removal_started_ms_ = 0;
   uint32_t last_transfer_ms_ = 0;
   uint32_t last_aura_led_control_ = 0;
   uint32_t last_aura_led_duration_ = 0;
