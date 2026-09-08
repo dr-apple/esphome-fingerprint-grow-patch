@@ -1,0 +1,137 @@
+# Lovelace "sections" view — paste as a new view's YAML (⋮ menu on a
+# dashboard → Edit Dashboard → Add View → ⋮ → Edit in YAML) into any
+# dashboard. Adjust entity IDs to match your own instance if you named
+# things differently (device name, lock, helper names).
+
+type: sections
+title: Schließsystem
+path: schliesssystem
+icon: mdi:fingerprint
+max_columns: 3
+dense_section_placement: true
+sections:
+  - type: grid
+    cards:
+      - type: heading
+        heading: Fingerabdruckleser Status
+        icon: mdi:information-outline
+      - type: entities
+        title: Sensor
+        show_header_toggle: false
+        state_color: true
+        entities:
+          - entity: sensor.klingel_fingerabdruckleser_anzahl_gespeicherter_fingerabdrucke
+            name: Gespeicherte Fingerabdrücke
+          - entity: sensor.klingel_fingerabdruckleser_speicherkapazitat
+            name: Speicherkapazität
+          - entity: sensor.klingel_fingerabdruckleser_sensor_status
+            name: Sensor Status
+          - entity: binary_sensor.klingel_fingerabdruckleser_fingerabdruck_einlernen_aktiv
+            name: Einlernen aktiv
+          - entity: sensor.klingel_fingerabdruckleser_letzte_erkannte_finger_id
+            name: Letzte erkannte Finger-ID
+          - entity: sensor.klingel_fingerabdruckleser_letzte_erkennungssicherheit
+            name: Letzte Erkennungssicherheit
+      - type: entities
+        title: Türentriegelung
+        show_header_toggle: false
+        state_color: true
+        entities:
+          - entity: automation.fingerabdruck_erkannt_haustur_entriegeln
+            name: Automation aktiv
+          - entity: lock.haustueroeffner
+            name: Haustüröffner
+      - type: entities
+        title: Verwaltung
+        show_header_toggle: false
+        entities:
+          - entity: button.klingel_fingerabdruckleser_alle_fingerabdrucke_loschen
+            name: Alle Fingerabdrücke löschen
+          - entity: button.klingel_fingerabdruckleser_anlernen_abbrechen
+            name: Anlernen abbrechen
+      - type: entities
+        title: Finger 4
+        show_header_toggle: false
+        state_color: true
+        entities:
+          - entity: input_text.fingerabdruck_finger_4_person
+            name: Person
+          - entity: input_boolean.fingerabdruck_finger_4_aufschliessen_aktiv
+            name: Schließt auf
+          - entity: button.klingel_fingerabdruckleser_finger_4_anlernen
+            name: Anlernen
+          - entity: button.klingel_fingerabdruckleser_finger_4_loschen
+            name: Löschen
+      - type: entities
+        title: Finger 5
+        show_header_toggle: false
+        state_color: true
+        entities:
+          - entity: input_text.fingerabdruck_finger_5_person
+            name: Person
+          - entity: input_boolean.fingerabdruck_finger_5_aufschliessen_aktiv
+            name: Schließt auf
+          - entity: button.klingel_fingerabdruckleser_finger_5_anlernen
+            name: Anlernen
+          - entity: button.klingel_fingerabdruckleser_finger_5_loschen
+            name: Löschen
+  - type: grid
+    cards:
+      - type: heading
+        heading: "Finger → Person zuordnen"
+        icon: mdi:account-key
+      - type: entities
+        title: Finger 1
+        show_header_toggle: false
+        state_color: true
+        entities:
+          - entity: input_text.fingerabdruck_finger_1_person
+            name: Person
+          - entity: input_boolean.fingerabdruck_finger_1_aufschliessen_aktiv
+            name: Schließt auf
+          - entity: button.klingel_fingerabdruckleser_finger_1_anlernen
+            name: Anlernen
+          - entity: button.klingel_fingerabdruckleser_finger_1_loschen
+            name: Löschen
+      - type: entities
+        title: Finger 2
+        show_header_toggle: false
+        state_color: true
+        entities:
+          - entity: input_text.fingerabdruck_finger_2_person
+            name: Person
+          - entity: input_boolean.fingerabdruck_finger_2_aufschliessen_aktiv
+            name: Schließt auf
+          - entity: button.klingel_fingerabdruckleser_finger_2_anlernen
+            name: Anlernen
+          - entity: button.klingel_fingerabdruckleser_finger_2_loschen
+            name: Löschen
+      - type: entities
+        title: Finger 3
+        show_header_toggle: false
+        state_color: true
+        entities:
+          - entity: input_text.fingerabdruck_finger_3_person
+            name: Person
+          - entity: input_boolean.fingerabdruck_finger_3_aufschliessen_aktiv
+            name: Schließt auf
+          - entity: button.klingel_fingerabdruckleser_finger_3_anlernen
+            name: Anlernen
+          - entity: button.klingel_fingerabdruckleser_finger_3_loschen
+            name: Löschen
+  - type: grid
+    column_span: 3
+    cards:
+      - type: heading
+        heading: Zugriffsprotokoll
+        icon: mdi:history
+      - type: logbook
+        title: Wer hat es versucht
+        entities:
+          - automation.fingerabdruck_erkannt_haustur_entriegeln
+          - automation.fingerabdruck_ohne_treffer_ins_logbuch
+          - lock.haustueroeffner
+        hours_to_show: 168
+        grid_options:
+          columns: full
+          rows: 6

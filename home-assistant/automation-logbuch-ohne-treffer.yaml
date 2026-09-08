@@ -1,0 +1,55 @@
+# Home Assistant automation: logs failed/no-match scan attempts to the
+# Logbook, so "did someone try and fail" is visible too, not just successful
+# unlocks. These MQTT payloads are plain "1", not JSON — the sensor's own
+# callbacks for these events carry no finger_id (a non-match has no identity
+# to report).
+#
+# BEFORE IMPORTING: replace lock.haustueroeffner with your own door lock
+# entity (only used here as the Logbook's attachment point, not controlled).
+
+alias: "Fingerabdruck ohne Treffer, ins Logbuch"
+description: >-
+  Protokolliert erfolglose Scans am Klingel-Fingerabdruckleser (kein Treffer, ungültiger
+  Scan, falsch aufgelegter Finger) im HA-Logbuch, damit sichtbar ist, wenn jemand es versucht hat.
+mode: queued
+max: 5
+triggers:
+  - trigger: mqtt
+    topic: esp_home/fingerprint/event/finger_unmatched
+    id: unmatched
+  - trigger: mqtt
+    topic: esp_home/fingerprint/event/finger_invalid
+    id: invalid
+  - trigger: mqtt
+    topic: esp_home/fingerprint/event/finger_misplaced
+    id: misplaced
+conditions: []
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: [unmatched]
+        sequence:
+          - action: logbook.log
+            data:
+              name: Fingerabdruckleser
+              message: "Unbekannter Fingerabdruck erkannt — kein Treffer in der Datenbank"
+              entity_id: lock.haustueroeffner
+      - conditions:
+          - condition: trigger
+            id: [invalid]
+        sequence:
+          - action: logbook.log
+            data:
+              name: Fingerabdruckleser
+              message: "Ungültiger Scan (z.B. Bild zu unscharf oder Finger falsch aufgelegt)"
+              entity_id: lock.haustueroeffner
+      - conditions:
+          - condition: trigger
+            id: [misplaced]
+        sequence:
+          - action: logbook.log
+            data:
+              name: Fingerabdruckleser
+              message: "Finger falsch positioniert erkannt"
+              entity_id: lock.haustueroeffner

@@ -1,0 +1,89 @@
+# Home Assistant automation: unlocks the door lock on a verified fingerprint
+# match, with three independent rejection paths logged to the Logbook.
+#
+# BEFORE IMPORTING:
+#   - Replace REPLACE_WITH_YOUR_SECRET below with the exact value you put in
+#     secrets.yaml as fingerprint_unlock_secret (see esphome/klingel-fingerprint.yaml).
+#   - Replace lock.haustueroeffner with your own door lock entity.
+#   - Replace script.danny_mobile_push_rich with your own notification action
+#     (or a plain notify.notify call).
+#   - The `lock.unlock` action is created with enabled: false on purpose —
+#     verify a few matches show up correctly in the Logbook first, then flip
+#     it to enabled: true once you trust it.
+#   - Requires the 10 helpers from home-assistant/helpers.md (per-finger
+#     person name + per-finger enable toggle) to already exist.
+
+alias: "Fingerabdruck erkannt, Haustür entriegeln"
+description: >-
+  Entriegelt die Haustür per lock.haustueroeffner, wenn der Klingel-Fingerabdruckleser
+  einen Treffer mit ausreichender Erkennungssicherheit meldet, und schickt eine Push-Nachricht.
+mode: single
+triggers:
+  - trigger: mqtt
+    topic: esp_home/fingerprint/event/finger_matched
+conditions: []
+actions:
+  - choose:
+      - alias: "Sicherheits-Token ungültig"
+        conditions:
+          - condition: template
+            value_template: >-
+              {{ not (trigger.payload_json.get('secret') == 'REPLACE_WITH_YOUR_SECRET')
+                 or not ((as_timestamp(now()) - (trigger.payload_json.get('ts', 0) | int(0))) | abs <= 2) }}
+        sequence:
+          - action: logbook.log
+            data:
+              name: Fingerabdruckleser
+              message: >-
+                verdächtiger Freischalt-Versuch abgelehnt (ungültiges Sicherheits-Token oder
+                Zeitstempel — evtl. eine abgespielte MQTT-Nachricht), angegebene Finger-ID:
+                {{ trigger.payload_json.get('finger_id', 'unbekannt') }}
+              entity_id: lock.haustueroeffner
+      - alias: "Erkennungssicherheit zu niedrig"
+        conditions:
+          - condition: template
+            value_template: "{{ not ((trigger.payload_json.confidence | float(0)) >= 200) }}"
+        sequence:
+          - action: logbook.log
+            data:
+              name: Fingerabdruckleser
+              message: >-
+                Fingerabdruck von {{ (states('input_text.fingerabdruck_finger_' ~ trigger.payload_json.finger_id ~ '_person')
+                or ('Finger ' ~ trigger.payload_json.finger_id)) }} erkannt, aber Erkennungssicherheit
+                zu niedrig ({{ trigger.payload_json.confidence }})
+              entity_id: lock.haustueroeffner
+      - alias: "Finger nicht freigeschaltet"
+        conditions:
+          - condition: template
+            value_template: >-
+              {{ not (is_state('input_boolean.fingerabdruck_finger_' ~ trigger.payload_json.finger_id ~ '_aufschliessen_aktiv', 'on')) }}
+        sequence:
+          - action: logbook.log
+            data:
+              name: Fingerabdruckleser
+              message: >-
+                Fingerabdruck von {{ (states('input_text.fingerabdruck_finger_' ~ trigger.payload_json.finger_id ~ '_person')
+                or ('Finger ' ~ trigger.payload_json.finger_id)) }} erkannt, aber dieser Finger
+                ist für die Türöffnung deaktiviert
+              entity_id: lock.haustueroeffner
+    default:
+      - action: lock.unlock
+        target:
+          entity_id: lock.haustueroeffner
+        enabled: false
+      - action: script.danny_mobile_push_rich
+        data:
+          title: Haustür entriegelt
+          message: >-
+            Fingerabdruck von {{ states('input_text.fingerabdruck_finger_' ~ trigger.payload_json.finger_id ~ '_person')
+            or ('Finger ' ~ trigger.payload_json.finger_id) }} erkannt, ich hab dir die Haustür aufgeschlossen.
+          push_data:
+            url: /dashboard-hof/0
+      - action: logbook.log
+        data:
+          name: Fingerabdruckleser
+          message: >-
+            Fingerabdruck von {{ (states('input_text.fingerabdruck_finger_' ~ trigger.payload_json.finger_id ~ '_person')
+            or ('Finger ' ~ trigger.payload_json.finger_id)) }} erkannt, Haustür entriegelt
+            (Sicherheit {{ trigger.payload_json.confidence }})
+          entity_id: lock.haustueroeffner

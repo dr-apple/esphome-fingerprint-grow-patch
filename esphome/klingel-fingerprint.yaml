@@ -1,0 +1,299 @@
+esphome:
+  name: klingel-fingerprint
+  friendly_name: "Klingel Fingerabdruckleser"
+
+# Shared secret embedded in the finger_matched MQTT payload (see below) so the
+# door-unlock automation in HA can reject any "finger_matched" message that
+# doesn't carry it — without this, anything able to publish to
+# esp_home/fingerprint/event/finger_matched (e.g. any other device sharing the
+# same MQTT login) could forge a fake match and unlock the door. Generate your
+# own random token (e.g. `python3 -c "import secrets; print(secrets.token_hex(24))"`)
+# and add it to secrets.yaml:
+#   fingerprint_unlock_secret: "<your own random token here>"
+# This is a plaintext MQTT payload field, not real encryption — it stops
+# forged/accidental messages from anything that doesn't know the secret, but
+# not a network sniffer capturing and replaying a genuine message. Add MQTT
+# TLS + broker-side publish ACLs (restrict this topic to only this device's
+# MQTT login) for that; that part has to happen on the broker itself.
+substitutions:
+  fingerprint_unlock_secret: !secret fingerprint_unlock_secret
+
+esp32:
+  # ESP32-S3 Super Mini pin mapping below. If you use a different S3 board
+  # (Seeed XIAO ESP32-S3, generic DevKitC-1, ...) the RX/TX/sensing pins
+  # will differ — see the wiring table tinytouch itself documents:
+  # https://github.com/ZimengXiong/tinyTouch/blob/main/docs/customer/build.md
+  board: esp32-s3-devkitc-1
+  framework:
+    # ESP-IDF, matching tinytouch's own (proven-working) firmware for this
+    # exact sensor on these exact pins/baud rate.
+    type: esp-idf
+
+# Patched fingerprint_grow: stock ESPHome sends one password-verify
+# handshake ~20ms after boot and permanently fails the component if that
+# single attempt gets no response. This fork keeps setup() just as fast and
+# non-blocking as stock (so it never eats into WiFi's time-critical early
+# association window), but if that first attempt gets no response, it keeps
+# retrying the handshake on the component's normal ~500ms update cadence in
+# the background instead of giving up for good.
+# See https://github.com/dr-apple/esphome-fingerprint-grow-patch
+external_components:
+  - source: github://dr-apple/esphome-fingerprint-grow-patch
+    components: [fingerprint_grow]
+    refresh: 0s
+
+wifi:
+  networks:
+    - ssid: !secret wifi_ssid_2
+      password: !secret wifi_password_2
+    - ssid: !secret wifi_ssid_1
+      password: !secret wifi_password_1
+  fast_connect: true
+  power_save_mode: none
+
+logger:
+  level: INFO
+
+# Local browser control at http://klingel-fingerprint.local/ — no HA, no
+# MQTT client needed, works from any phone/laptop on the same network.
+web_server:
+  version: 3
+
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  topic_prefix: "esp_home/fingerprint"
+  discover_ip: True # enable device discovery
+  discovery: True
+  discovery_prefix: homeassistant
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# Needed so the finger_matched MQTT payload can carry a real Unix timestamp
+# (see on_finger_scan_matched below) — HA rejects the message if it's not
+# within a couple seconds of "now", so a sniffed/replayed message stops being
+# valid almost immediately.
+time:
+  - platform: sntp
+    id: sntp_time
+
+# ZW101-style sensor, same as tinytouch uses. It speaks the common 0xEF01
+# "Grow" packet protocol, so ESPHome's native fingerprint_grow component
+# should work even though only R307/R503/R503-RGB/ZFM-20 are officially
+# listed as tested — same protocol family. If enrollment/matching behaves
+# oddly, that's the first thing to double check against the datasheet.
+uart:
+  id: fp_uart
+  tx_pin: GPIO43   # -> sensor pin 5 (RX)
+  rx_pin: GPIO44   # <- sensor pin 4 (TX)
+  baud_rate: 57600
+
+fingerprint_grow:
+  uart_id: fp_uart
+  # sensing_pin (GPIO2/TouchOut) removed: DEBUG logs showed it permanently
+  # reporting "finger touching" even when the real UART scan said "no finger"
+  # and even seconds after the user's finger was nowhere near the sensor —
+  # the pin is simply stuck/unreliable on this sensor unit. This matches
+  # tinytouch's own driver, which documents TouchOut as "not reliable enough"
+  # and never gates on it either. Without this pin, ESPHome polls the sensor
+  # with a real UART image-capture command every update_interval (500ms)
+  # instead of relying on the pin — worth watching WiFi/timing warnings in
+  # the log after this change, since the earlier concern about that ("found
+  # to disrupt overall device timing badly") was raised back when the real
+  # cause turned out to be a bad USB cable, not necessarily the polling load
+  # itself.
+
+  # State/event topics (published under esp_home/fingerprint/...), plus the
+  # Aura LED ring: green flash on a match, red flash on a miss/invalid scan,
+  # settling back to a steady blue idle glow either way.
+  #
+  # Known limitation: on this sensor unit, aura_led_control / led_control are
+  # both acknowledged with OK by the sensor over UART (proven via DEBUG logs)
+  # but the physical LED ring stays permanently on "blue breathing" regardless
+  # of the command sent — a hardware/firmware limitation of this specific
+  # cheap sensor clone, not something fixable from the ESP32 side. The calls
+  # below are left in since they're harmless and match the sensor's own
+  # documented protocol; don't expect to see green/red on your unit.
+  on_finger_scan_matched:
+    - mqtt.publish:
+        topic: "esp_home/fingerprint/event/finger_matched"
+        # "secret" lets the HA-side unlock automation reject forged messages
+        # from anything that doesn't know fingerprint_unlock_secret — see the
+        # note above the substitutions: block. "ts" (Unix seconds) lets HA
+        # additionally reject anything not within ~2s of "now", so even a
+        # sniffed-and-replayed genuine message stops being valid almost
+        # immediately.
+        payload: !lambda 'return str_sprintf("{\"finger_id\":%d,\"confidence\":%d,\"secret\":\"${fingerprint_unlock_secret}\",\"ts\":%u}", finger_id, confidence, (unsigned) id(sntp_time).now().timestamp);'
+    - fingerprint_grow.aura_led_control:
+        state: FLASHING
+        speed: 50
+        color: GREEN
+        count: 2
+    - delay: 1s
+    - fingerprint_grow.aura_led_control:
+        state: BREATHING
+        speed: 100
+        color: BLUE
+        count: 0
+
+  on_finger_scan_unmatched:
+    - mqtt.publish:
+        topic: "esp_home/fingerprint/event/finger_unmatched"
+        payload: "1"
+    - fingerprint_grow.aura_led_control:
+        state: FLASHING
+        speed: 50
+        color: RED
+        count: 2
+    - delay: 1s
+    - fingerprint_grow.aura_led_control:
+        state: BREATHING
+        speed: 100
+        color: BLUE
+        count: 0
+
+  on_finger_scan_invalid:
+    - mqtt.publish:
+        topic: "esp_home/fingerprint/event/finger_invalid"
+        payload: "1"
+    - fingerprint_grow.aura_led_control:
+        state: FLASHING
+        speed: 50
+        color: RED
+        count: 2
+    - delay: 1s
+    - fingerprint_grow.aura_led_control:
+        state: BREATHING
+        speed: 100
+        color: BLUE
+        count: 0
+
+  on_finger_scan_misplaced:
+    - mqtt.publish:
+        topic: "esp_home/fingerprint/event/finger_misplaced"
+        payload: "1"
+
+  on_enrollment_scan:
+    - mqtt.publish:
+        topic: "esp_home/fingerprint/event/enrollment_scan"
+        payload: !lambda 'return str_sprintf("{\"finger_id\":%d,\"scan_num\":%d}", finger_id, scan_num);'
+
+  on_enrollment_done:
+    - mqtt.publish:
+        topic: "esp_home/fingerprint/event/enrollment_done"
+        payload: !lambda 'return str_sprintf("{\"finger_id\":%d}", finger_id);'
+
+  on_enrollment_failed:
+    - mqtt.publish:
+        topic: "esp_home/fingerprint/event/enrollment_failed"
+        payload: !lambda 'return str_sprintf("{\"finger_id\":%d}", finger_id);'
+
+sensor:
+  - platform: fingerprint_grow
+    fingerprint_count:
+      name: "Anzahl gespeicherter Fingerabdrücke"
+    last_finger_id:
+      name: "Letzte erkannte Finger-ID"
+    last_confidence:
+      name: "Letzte Erkennungssicherheit"
+    capacity:
+      name: "Speicherkapazität"
+    status:
+      name: "Sensor Status"
+
+binary_sensor:
+  - platform: fingerprint_grow
+    name: "Fingerabdruck Einlernen aktiv"
+
+# Remote control via plain buttons — no MQTT payloads to type by hand.
+# These show up two places automatically:
+#   - Home Assistant: as button entities, via MQTT discovery (mqtt: block
+#     above) — just tap "Finger 1 anlernen" etc. in the HA UI.
+#   - Any browser: http://klingel-fingerprint.local/ (the web_server: above)
+#     lists the exact same buttons, no Home Assistant needed at all.
+#
+# 5 slots covers a typical sensor's practical enrollment count; the actual
+# hardware capacity is reported by the "Speicherkapazität" sensor above —
+# add more finger_id blocks below if you need more than 5.
+button:
+  - platform: template
+    name: "Finger 1 anlernen"
+    icon: "mdi:fingerprint"
+    on_press:
+      - fingerprint_grow.enroll:
+          finger_id: 1
+          num_scans: 2
+  - platform: template
+    name: "Finger 2 anlernen"
+    icon: "mdi:fingerprint"
+    on_press:
+      - fingerprint_grow.enroll:
+          finger_id: 2
+          num_scans: 2
+  - platform: template
+    name: "Finger 3 anlernen"
+    icon: "mdi:fingerprint"
+    on_press:
+      - fingerprint_grow.enroll:
+          finger_id: 3
+          num_scans: 2
+  - platform: template
+    name: "Finger 4 anlernen"
+    icon: "mdi:fingerprint"
+    on_press:
+      - fingerprint_grow.enroll:
+          finger_id: 4
+          num_scans: 2
+  - platform: template
+    name: "Finger 5 anlernen"
+    icon: "mdi:fingerprint"
+    on_press:
+      - fingerprint_grow.enroll:
+          finger_id: 5
+          num_scans: 2
+
+  - platform: template
+    name: "Finger 1 löschen"
+    icon: "mdi:fingerprint-off"
+    on_press:
+      - fingerprint_grow.delete:
+          finger_id: 1
+  - platform: template
+    name: "Finger 2 löschen"
+    icon: "mdi:fingerprint-off"
+    on_press:
+      - fingerprint_grow.delete:
+          finger_id: 2
+  - platform: template
+    name: "Finger 3 löschen"
+    icon: "mdi:fingerprint-off"
+    on_press:
+      - fingerprint_grow.delete:
+          finger_id: 3
+  - platform: template
+    name: "Finger 4 löschen"
+    icon: "mdi:fingerprint-off"
+    on_press:
+      - fingerprint_grow.delete:
+          finger_id: 4
+  - platform: template
+    name: "Finger 5 löschen"
+    icon: "mdi:fingerprint-off"
+    on_press:
+      - fingerprint_grow.delete:
+          finger_id: 5
+
+  - platform: template
+    name: "Alle Fingerabdrücke löschen"
+    icon: "mdi:delete-sweep"
+    on_press:
+      - fingerprint_grow.delete_all:
+
+  - platform: template
+    name: "Anlernen abbrechen"
+    icon: "mdi:cancel"
+    on_press:
+      - fingerprint_grow.cancel_enroll:
