@@ -1,4 +1,4 @@
-# esphome-fingerprint-grow-patch
+# TouchAssist
 
 A patched `fingerprint_grow` component for [ESPHome](https://esphome.io/), plus a full
 working project on top of it: a fingerprint-scanner doorbell/entry system on an

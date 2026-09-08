@@ -36,9 +36,9 @@ esp32:
 # association window), but if that first attempt gets no response, it keeps
 # retrying the handshake on the component's normal ~500ms update cadence in
 # the background instead of giving up for good.
-# See https://github.com/dr-apple/esphome-fingerprint-grow-patch
+# See https://github.com/dr-apple/TouchAssist
 external_components:
-  - source: github://dr-apple/esphome-fingerprint-grow-patch
+  - source: github://dr-apple/TouchAssist
     components: [fingerprint_grow]
     refresh: 0s
 
